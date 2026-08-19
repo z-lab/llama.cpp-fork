@@ -339,6 +339,7 @@ llama_model * llama_model_create(llm_arch arch, const llama_model_params & param
 
     if (model != nullptr) {
         model->arch = arch;
+        model->mirror_output_weight = params.mirror_output_weight;
         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && !llm_arch_supports_sm_tensor(arch)) {
             throw std::runtime_error(std::string("LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '") + llm_arch_name(arch) + "'");
         }
@@ -516,6 +517,17 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
         // output
         if (std::regex_match(tensor_name, pattern_output_weight)) {
+            if (ud->model->mirror_output_weight) {
+                // MIRRORED (not AXIS_1): keep the output projection unsplit so the
+                // logits come out mirrored. This is required by DFlash/DSpark
+                // drafters, whose candidate selector runs TOP_K / GET_ROWS (per-row
+                // ops) on the shared target logits and cannot consume an
+                // axis-0-split result. The output weight (~2.4GB BF16) then lives
+                // on a single device instead of being vocab-split across GPUs.
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            }
+            // MTP / plain decoding: vocab-split the output projection across GPUs
+            // (half the rows per device), saving ~1.2 GB of VRAM per GPU vs MIRRORED.
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
         }
         if (std::regex_match(tensor_name, pattern_output_bias)) {
@@ -2494,6 +2506,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.mirror_output_weight        =*/ false,
     };
 
     return result;

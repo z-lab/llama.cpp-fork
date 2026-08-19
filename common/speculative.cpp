@@ -2328,6 +2328,17 @@ common_params common_base_params_to_speculative(const common_params & params) {
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
 
+        // SPLIT_MODE_TENSOR fix: the draft model must never inherit the target's
+        // tensor split mode. DFlash/DSpark drafters share tensors with the target
+        // (tok_embd, output) which may be split along axis 0 under tensor
+        // parallelism; per-row ops (GET_ROWS, TOP_K) in the draft graph cannot
+        // consume axis-0-split inputs. Force the draft context to a single-device
+        // (non-split) scheduler - shared tensors are then copied into the draft's
+        // own buffers instead of being split.
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+            result.split_mode = LLAMA_SPLIT_MODE_NONE;
+        }
+
         if (params_spec.cpuparams.n_threads > 0) {
             result.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
             result.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
