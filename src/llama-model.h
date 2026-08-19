@@ -588,6 +588,7 @@ struct llama_model {
     std::string name = "n/a";
 
     llama_hparams hparams = {};
+    bool mirror_output_weight = false; // output.weight stays unsplit (mirrored); set by DFlash/DSpark spec init
     llama_vocab   vocab;
 
     // for classifier models

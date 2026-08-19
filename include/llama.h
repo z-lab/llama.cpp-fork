@@ -339,6 +339,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool mirror_output_weight; // keep output.weight unsplit (mirrored on every device); required only by DFlash/DSpark drafters whose candidate selector consumes full target logits
     };
 
     struct llama_sampler_seq_config {

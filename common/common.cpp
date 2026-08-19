@@ -1687,6 +1687,11 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
     mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    // DFlash/DSpark drafters need the target logits unsplit (MIRRORED output.weight) for their
+    // candidate selector (TOP_K / GET_ROWS); MTP and plain decoding don't, so keep the split there
+    // to save ~1.2 GB VRAM per GPU.
+    mparams.mirror_output_weight         = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end()
+                                        || std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) != params.speculative.types.end();
 
     return mparams;
 }
