@@ -1078,14 +1078,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return true;
         }
 
-        // Target prefill may contain token IDs or multimodal embeddings. Both
-        // produce the target-layer features used to seed the draft KV cache, so
-        // skipping the embedding batches leaves a hole in the draft's cache and
-        // the next injection fails to initialize.
+        // Target prefill may contain token IDs or multimodal embeddings.
+        // Embedding batches (mtmd image chunks) are skipped: on M-RoPE targets
+        // their rows carry non-linear positions the 1D draft cache cannot
+        // store - a chunk wider than one ubatch fails the KV cache's
+        // consecutive-position check on its second ubatch, and even a
+        // single-ubatch chunk injects rows at bogus draft positions. The hole
+        // this leaves is zero-filled when the next token batch arrives (below).
         // TODO: revisit after https://github.com/ggml-org/llama.cpp/pull/24669 is merged
         const bool has_tokens     = batch_in.token != nullptr;
         const bool has_embeddings = batch_in.embd  != nullptr;
-        if (has_tokens == has_embeddings) {
+        if (has_embeddings || has_tokens == has_embeddings) {
             return true;
         }
 
@@ -1095,6 +1098,72 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
+
+        // Multimodal (mtmd) image chunks are decoded into the target by the
+        // mtmd helper and never pass through this hook, so the draft cache is
+        // left with a positional hole and the next injection fails the KV
+        // cache's consecutive-position check (llama_decode rc=-1). The same
+        // hole appears when the target reuses cached prompt prefixes the
+        // draft cache never saw. Seed the hole with zero features: drafted
+        // tokens remain verified by the target, so this degrades post-image
+        // acceptance only, never output correctness.
+        for (int32_t j = 0; j < n_tokens; ++j) {
+            if (j > 0 && batch_in.seq_id[j][0] == batch_in.seq_id[j - 1][0]) {
+                continue;
+            }
+            GGML_ASSERT(batch_in.n_seq_id[j] == 1);
+            const llama_seq_id seq_id = batch_in.seq_id[j][0];
+            const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+            const llama_pos gap_beg = pos_max + 1;
+            const llama_pos gap_end = batch_in.pos[j]; // exclusive
+            if (gap_end <= gap_beg) {
+                continue;
+            }
+            LOG_WRN("%s: draft cache hole for seq %d: [%d, %d) - seeding with zero features "
+                    "(multimodal chunk or reused prompt prefix bypassed process())\n",
+                    __func__, (int) seq_id, (int) gap_beg, (int) gap_end);
+            for (llama_pos off = gap_beg; off < gap_end; off += n_ubatch) {
+                const int32_t n_chunk = std::min<int32_t>(n_ubatch, (int32_t) (gap_end - off));
+                features_buf.assign((size_t) n_chunk * n_embd_enc, 0.0f);
+
+                llama_batch enc_batch = {
+                    /*.n_tokens =*/ n_chunk,
+                    /*.token    =*/ nullptr,
+                    /*.embd     =*/ features_buf.data(),
+                    /*.pos      =*/ nullptr,
+                    /*.n_seq_id =*/ nullptr,
+                    /*.seq_id   =*/ nullptr,
+                    /*.logits   =*/ nullptr,
+                };
+
+                int32_t rc = llama_encode(ctx_dft, enc_batch);
+                if (rc != 0) {
+                    LOG_ERR("%s: llama_encode(ctx_dft) zero-fill failed rc=%d (n_tokens=%d, pos=%d)\n",
+                            __func__, rc, (int) n_chunk, (int) off);
+                    return false;
+                }
+
+                const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
+                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+
+                batch_inject.n_tokens = n_chunk;
+                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+                for (int32_t i = 0; i < n_chunk; ++i) {
+                    batch_inject.pos[i]       = off + i;
+                    batch_inject.n_seq_id[i]  = 1;
+                    batch_inject.seq_id[i][0] = seq_id;
+                    batch_inject.logits[i]    = false;
+                }
+
+                rc = llama_decode(ctx_dft, batch_inject);
+                if (rc != 0) {
+                    LOG_ERR("%s: llama_decode(ctx_dft) zero-fill failed rc=%d (n_tokens=%d, pos=%d)\n",
+                            __func__, rc, (int) n_chunk, (int) off);
+                    return false;
+                }
+                llama_synchronize(ctx_dft);
+            }
+        }
 
         // Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
         for (int32_t offset = 0; offset < n_tokens; offset += n_ubatch) {
