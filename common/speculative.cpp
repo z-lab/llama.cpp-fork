@@ -1096,6 +1096,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
+        // The target may use multi-dimensional position IDs for multimodal
+        // embeddings (for example Qwen-VL M-RoPE). The DFlash draft is a
+        // text-only decoder with a one-dimensional KV cache, so copying those
+        // repeated spatial positions makes its sequence non-consecutive.
+        // Keep target positions untouched and inject target features into the
+        // draft cache at strictly increasing per-sequence positions instead.
+        std::vector<llama_pos> next_inject_pos(n_seq, -1);
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            next_inject_pos[seq_id] = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+        }
+
         // Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
         for (int32_t offset = 0; offset < n_tokens; offset += n_ubatch) {
             const int32_t n_chunk = std::min(n_ubatch, n_tokens - offset);
@@ -1139,7 +1150,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 GGML_ASSERT(batch_in.n_seq_id[j] == 1);
                 const llama_seq_id seq_id = batch_in.seq_id[j][0];
                 GGML_ASSERT(seq_id >= 0 && seq_id < (llama_seq_id) n_seq);
-                batch_inject.pos[i]       = batch_in.pos[j];
+                batch_inject.pos[i]       = next_inject_pos[seq_id]++;
                 batch_inject.n_seq_id[i]  = 1;
                 batch_inject.seq_id[i][0] = seq_id;
                 batch_inject.logits[i]    = false;
@@ -1176,7 +1187,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             common_sampler_reset(smpls[seq_id].get());
 
-            const int32_t n = (int32_t) dp.n_past;
+            // Multimodal target prompts can have many embedding rows while the
+            // text-only draft cache advances on its own 1-D position scale.
+            // Draft from the cache's actual next position instead of assuming
+            // target token count and draft position are identical.
+            const int32_t n = (int32_t) llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
 
             const int32_t n_draft = params.n_max;
 
