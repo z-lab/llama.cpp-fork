@@ -1187,7 +1187,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             common_sampler_reset(smpls[seq_id].get());
 
-                                    const int32_t n = llama_memory_seq_pos_max(mem_dft, seq_id) + 1;
+            const int32_t n = llama_memory_seq_pos_max(mem_dft, seq_id) + 1;
 
             const int32_t n_draft = params.n_max;
 
