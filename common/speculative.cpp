@@ -1096,7 +1096,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
-                // The target context may advance over a vision chunk using positions that the
+        // The target context may advance over a vision chunk using positions that the
         // independent DFlash context cannot reproduce exactly. Keep the draft in its
         // own consecutive position space so a later decode always satisfies the
         // one-axis RoPE invariant (Y = X + 1).
@@ -1106,7 +1106,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             dnext[seq_id] = llama_memory_seq_pos_max(mem_dft, seq_id) + 1;
         }
 
-// Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
+        // Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
         for (int32_t offset = 0; offset < n_tokens; offset += n_ubatch) {
             const int32_t n_chunk = std::min(n_ubatch, n_tokens - offset);
             features_buf.resize((size_t) n_chunk * n_embd_enc);
@@ -1149,7 +1149,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 GGML_ASSERT(batch_in.n_seq_id[j] == 1);
                 const llama_seq_id seq_id = batch_in.seq_id[j][0];
                 GGML_ASSERT(seq_id >= 0 && seq_id < (llama_seq_id) n_seq);
-                                batch_inject.pos[i]       = dnext[seq_id]++;
+                batch_inject.pos[i]       = dnext[seq_id]++;
                 batch_inject.n_seq_id[i]  = 1;
                 batch_inject.seq_id[i][0] = seq_id;
                 batch_inject.logits[i]    = false;
@@ -1173,8 +1173,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         common_batch_clear(batch);
 
-                auto * mem_dft = llama_get_memory(ctx_dft);
-// build one batch holding every drafting sequence's noise block into a single decode)
+        auto * mem_dft = llama_get_memory(ctx_dft);
+        // build one batch holding every drafting sequence's noise block into a single decode)
         // record where each block starts and its size
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
@@ -1187,7 +1187,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             common_sampler_reset(smpls[seq_id].get());
 
-                        const int32_t n = llama_memory_seq_pos_max(mem_dft, seq_id) + 1;
+                                    const int32_t n = llama_memory_seq_pos_max(mem_dft, seq_id) + 1;
 
             const int32_t n_draft = params.n_max;
 
